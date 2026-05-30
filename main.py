@@ -3,8 +3,29 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import os
 import uuid
+import requests
 
-# FIX: Changed build_fcn_pdf to build_pdf to match your script exactly
+# ==========================================
+# FIX 1: YAHOO FINANCE RENDER BLOCK BYPASS
+# ==========================================
+# Yahoo Finance actively blocks cloud servers (like Render).
+# This monkey-patch tricks Yahoo into thinking the Render server is a standard Google Chrome browser.
+original_session_request = requests.Session.request
+def patched_session_request(self, method, url, **kwargs):
+    kwargs.setdefault('headers', {})
+    kwargs['headers']['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    return original_session_request(self, method, url, **kwargs)
+requests.Session.request = patched_session_request
+
+original_request = requests.request
+def patched_request(method, url, **kwargs):
+    kwargs.setdefault('headers', {})
+    kwargs['headers']['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    return original_request(method, url, **kwargs)
+requests.request = patched_request
+# ==========================================
+
+# Now we can safely import the core function
 from FCN_core import build_pdf
 
 app = FastAPI(title="FCN PDF Generator API")
@@ -21,7 +42,7 @@ class FCNRequest(BaseModel):
     ki_type: str = "At Maturity"
 
 def remove_file(path: str):
-    """Deletes the PDF from the server after sending it to n8n to save space"""
+    """Deletes the PDF from the server after sending it to n8n"""
     if os.path.exists(path):
         try:
             os.remove(path)
@@ -31,13 +52,22 @@ def remove_file(path: str):
 @app.post("/generate-pdf")
 async def create_pdf(req: FCNRequest, background_tasks: BackgroundTasks):
     try:
+        # ==========================================
+        # FIX 2: TICKER STRING CLEANUP
+        # ==========================================
+        # Strips accidental spaces so "AAPL, MSFT" safely becomes "AAPL,MSFT"
+        if "," in req.tickers:
+            clean_tickers = ",".join([t.strip() for t in req.tickers.split(",")])
+        else:
+            clean_tickers = req.tickers.strip()
+
         unique_id = uuid.uuid4().hex[:8]
-        safe_tickers = req.tickers.replace(",", "_").replace(" ", "")
-        filename = f"FCN_{safe_tickers}_{unique_id}.pdf"
+        safe_name = clean_tickers.replace(",", "_").replace(" ", "")
+        filename = f"FCN_{safe_name}_{unique_id}.pdf"
         
-        # FIX: Changed the function call from build_fcn_pdf to build_pdf
+        # Call the core function with the cleaned tickers
         build_pdf(
-            tickers=req.tickers,
+            tickers=clean_tickers,
             tenor=req.tenor,
             strike=req.strike,
             ko=req.ko,
@@ -56,7 +86,7 @@ async def create_pdf(req: FCNRequest, background_tasks: BackgroundTasks):
         
         return FileResponse(
             path=filename, 
-            filename=f"FCN_{safe_tickers}.pdf", 
+            filename=f"FCN_{safe_name}.pdf", 
             media_type='application/pdf'
         )
         
