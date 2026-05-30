@@ -4,12 +4,11 @@ from pydantic import BaseModel
 import os
 import uuid
 
-# Import the core PDF generation function from your extracted script
-from FCN_core import build_fcn_pdf
+# FIX: Changed build_fcn_pdf to build_pdf to match your script exactly
+from FCN_core import build_pdf
 
 app = FastAPI(title="FCN PDF Generator API")
 
-# Define the expected JSON payload from n8n based on your script's parameters
 class FCNRequest(BaseModel):
     tickers: str
     tenor: int = 6
@@ -32,13 +31,12 @@ def remove_file(path: str):
 @app.post("/generate-pdf")
 async def create_pdf(req: FCNRequest, background_tasks: BackgroundTasks):
     try:
-        # Generate a unique filename to prevent overwriting if multiple requests occur
         unique_id = uuid.uuid4().hex[:8]
         safe_tickers = req.tickers.replace(",", "_").replace(" ", "")
         filename = f"FCN_{safe_tickers}_{unique_id}.pdf"
         
-        # Call your core function
-        build_fcn_pdf(
+        # FIX: Changed the function call from build_fcn_pdf to build_pdf
+        build_pdf(
             tickers=req.tickers,
             tenor=req.tenor,
             strike=req.strike,
@@ -54,10 +52,8 @@ async def create_pdf(req: FCNRequest, background_tasks: BackgroundTasks):
         if not os.path.exists(filename):
             raise Exception("PDF generation failed. File not found.")
 
-        # Schedule the file for deletion AFTER it is sent back to n8n
         background_tasks.add_task(remove_file, filename)
         
-        # Return the PDF file directly
         return FileResponse(
             path=filename, 
             filename=f"FCN_{safe_tickers}.pdf", 
