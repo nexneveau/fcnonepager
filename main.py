@@ -8,8 +8,6 @@ import requests
 # ==========================================
 # FIX 1: YAHOO FINANCE RENDER BLOCK BYPASS
 # ==========================================
-# Yahoo Finance actively blocks cloud servers (like Render).
-# This monkey-patch tricks Yahoo into thinking the Render server is a standard Google Chrome browser.
 original_session_request = requests.Session.request
 def patched_session_request(self, method, url, **kwargs):
     kwargs.setdefault('headers', {})
@@ -25,7 +23,6 @@ def patched_request(method, url, **kwargs):
 requests.request = patched_request
 # ==========================================
 
-# Now we can safely import the core function
 from FCN_core import build_pdf
 
 app = FastAPI(title="FCN PDF Generator API")
@@ -42,7 +39,6 @@ class FCNRequest(BaseModel):
     ki_type: str = "At Maturity"
 
 def remove_file(path: str):
-    """Deletes the PDF from the server after sending it to n8n"""
     if os.path.exists(path):
         try:
             os.remove(path)
@@ -53,21 +49,21 @@ def remove_file(path: str):
 async def create_pdf(req: FCNRequest, background_tasks: BackgroundTasks):
     try:
         # ==========================================
-        # FIX 2: TICKER STRING CLEANUP
+        # FIX 2: CONVERT STRING TO LIST
         # ==========================================
-        # Strips accidental spaces so "AAPL, MSFT" safely becomes "AAPL,MSFT"
-        if "," in req.tickers:
-            clean_tickers = ",".join([t.strip() for t in req.tickers.split(",")])
-        else:
-            clean_tickers = req.tickers.strip()
+        # This converts "AAPL, MSFT" from n8n into the Python list: ["AAPL", "MSFT"]
+        # It also prevents the "A", "A", "P", "L" loop bug!
+        ticker_list = [t.strip() for t in req.tickers.split(",") if t.strip()]
 
         unique_id = uuid.uuid4().hex[:8]
-        safe_name = clean_tickers.replace(",", "_").replace(" ", "")
+        
+        # Create a safe filename (e.g., FCN_AAPL_MSFT_1a2b3c4d.pdf)
+        safe_name = "_".join(ticker_list)
         filename = f"FCN_{safe_name}_{unique_id}.pdf"
         
-        # Call the core function with the cleaned tickers
+        # Pass the LIST to your function, not the string
         build_pdf(
-            tickers=clean_tickers,
+            tickers=ticker_list,  # <--- Now passing the proper list!
             tenor=req.tenor,
             strike=req.strike,
             ko=req.ko,
