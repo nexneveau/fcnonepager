@@ -4,9 +4,10 @@ from pydantic import BaseModel
 import os
 import uuid
 import requests
+from typing import Optional  # <--- NEW IMPORT ADDED HERE
 
 # ==========================================
-# FIX 1: YAHOO FINANCE RENDER BLOCK BYPASS
+# YAHOO FINANCE RENDER BLOCK BYPASS
 # ==========================================
 original_session_request = requests.Session.request
 def patched_session_request(self, method, url, **kwargs):
@@ -27,14 +28,17 @@ from FCN_core import build_pdf
 
 app = FastAPI(title="FCN PDF Generator API")
 
+# ==========================================
+# FIX: ALLOW NULL VALUES USING 'Optional'
+# ==========================================
 class FCNRequest(BaseModel):
     tickers: str
     tenor: int = 6
-    strike: float = None
-    ko: float = None
-    ki: float = None
+    strike: Optional[float] = None
+    ko: Optional[float] = None
+    ki: Optional[float] = None
     currency: str = "USD"
-    coupon: float = None
+    coupon: Optional[float] = None
     ko_type: str = "Daily Close"
     ki_type: str = "At Maturity"
 
@@ -48,22 +52,17 @@ def remove_file(path: str):
 @app.post("/generate-pdf")
 async def create_pdf(req: FCNRequest, background_tasks: BackgroundTasks):
     try:
-        # ==========================================
-        # FIX 2: CONVERT STRING TO LIST
-        # ==========================================
-        # This converts "AAPL, MSFT" from n8n into the Python list: ["AAPL", "MSFT"]
-        # It also prevents the "A", "A", "P", "L" loop bug!
-        ticker_list = [t.strip() for t in req.tickers.split(",") if t.strip()]
+        # Prevent crash if tickers is completely empty
+        if not req.tickers or req.tickers.strip() == "":
+            raise Exception("No tickers provided.")
 
+        ticker_list = [t.strip() for t in req.tickers.split(",") if t.strip()]
         unique_id = uuid.uuid4().hex[:8]
-        
-        # Create a safe filename (e.g., FCN_AAPL_MSFT_1a2b3c4d.pdf)
         safe_name = "_".join(ticker_list)
         filename = f"FCN_{safe_name}_{unique_id}.pdf"
         
-        # Pass the LIST to your function, not the string
         build_pdf(
-            tickers=ticker_list,  # <--- Now passing the proper list!
+            tickers=ticker_list,
             tenor=req.tenor,
             strike=req.strike,
             ko=req.ko,
