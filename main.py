@@ -99,20 +99,17 @@ from fund_updater import process_funds_csv
 # FUND UPDATER WEBHOOK ENDPOINT
 # ==========================================
 @app.post("/update-funds")
-async def update_funds_api(
-    file: UploadFile = File(...), 
-    skip_risk: bool = Form(False)
-):
+async def update_funds_api(file: UploadFile = File(...)):
     """
-    Receives a CSV file from n8n, processes it through Morningstar API,
-    and returns the fully updated CSV file back to n8n.
+    Receives a CSV file from n8n, processes it through Morningstar API.
+    Risk is forced to TRUE to prevent Render 100-second timeouts.
     """
     try:
         # Read the incoming CSV file into memory
         contents = await file.read()
         
-        # Process the funds using the new script
-        updated_csv_bytes = process_funds_csv(contents, skip_risk=skip_risk)
+        # FORCE skip_risk to True so it processes instantly
+        updated_csv_bytes = process_funds_csv(contents, skip_risk=True)
         
         # Return the newly updated CSV file as a direct download response
         return Response(
