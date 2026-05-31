@@ -6,3 +6,7 @@ pandas
 matplotlib
 yfinance
 yahooquery
+python-multipart
+openpyxl
+requests
+python-dotenv
