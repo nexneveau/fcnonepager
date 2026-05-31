@@ -52,12 +52,12 @@ def _parse_fund(el: ET.Element) -> dict:
     return {
         "id": el.get("_id"), "isin": g("DP-ISIN"), "name": g("DP-FundName"),
         "currency": g("DP-Currency"), "category": g("DP-CategoryName"),
-        "nav_date": g("DP-DayEndDate"), "return_ytd": g("DP-ReturnYTD"),
-        "return_1w": g("DP-Return1Week"), "return_1m": g("DP-Return1Mth"),
-        "return_3m": g("DP-Return3Mth"), "return_6m": g("DP-Return6Mth"),
-        "return_1y": g("DP-Return1Yr"), "return_2y": g("DP-Return2Yr"),
-        "return_3y": g("DP-Return3Yr"), "return_5y": g("DP-Return5Yr"),
-        "return_10y": g("DP-Return10Yr"),
+        "nav_date": g("DP-DayEndDate"), "return_ytd": g("TTR-ReturnYTD"),
+        "return_1w": g("DP-Return1Week"), "return_1m": g("TTR-Return1Mth"),
+        "return_3m": g("TTR-Return3Mth"), "return_6m": g("TTR-Return6Mth"),
+        "return_1y": g("TTR-Return1Yr"), "return_2y": g("TTR-Return2Yr"),
+        "return_3y": g("TTR-Return3Yr"), "return_5y": g("TTR-Return5Yr"),
+        "return_10y": g("TTR-Return10Yr"),
     }
 
 def load_universe() -> list[dict]:
