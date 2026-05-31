@@ -87,3 +87,39 @@ async def create_pdf(req: FCNRequest, background_tasks: BackgroundTasks):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# Add these imports to the top of your main.py file
+from fastapi import UploadFile, File, Form
+from fastapi.responses import Response
+from fund_updater import process_funds_csv
+
+# ... [Keep your existing PDF generation code as it is] ...
+
+# ==========================================
+# FUND UPDATER WEBHOOK ENDPOINT
+# ==========================================
+@app.post("/update-funds")
+async def update_funds_api(
+    file: UploadFile = File(...), 
+    skip_risk: bool = Form(False)
+):
+    """
+    Receives a CSV file from n8n, processes it through Morningstar API,
+    and returns the fully updated CSV file back to n8n.
+    """
+    try:
+        # Read the incoming CSV file into memory
+        contents = await file.read()
+        
+        # Process the funds using the new script
+        updated_csv_bytes = process_funds_csv(contents, skip_risk=skip_risk)
+        
+        # Return the newly updated CSV file as a direct download response
+        return Response(
+            content=updated_csv_bytes, 
+            media_type="text/csv", 
+            headers={"Content-Disposition": "attachment; filename=Updated_Fund_Prices.csv"}
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process CSV: {str(e)}")
