@@ -19,8 +19,8 @@ _UNIVERSE_CACHE_DATE = None
 
 # ==========================================
 # THE ALIAS MAP (FAILSAFE)
-# If Morningstar uses a completely different name than UWEALTH, map it here.
-# Format: "uwealth exact csv name in lowercase": "morningstar exact name in lowercase"
+# If the Debug column says 'NOT FOUND', map the names manually here.
+# Format: "your exact csv name in lowercase": "morningstar exact name in lowercase"
 # ==========================================
 ALIAS_MAP = {
     # Example: "united-i global balanced fund myr class": "uob united-i global balanced myr",
@@ -44,6 +44,7 @@ OUTPUT_COLUMNS = [
     ("10-yr (%)",                                "return_10y"),
     ("3 yr Volatility (%)",                      "stddev_3y"),
     ("Fund Sales Charge (%)",                    "_sales_charge"),
+    ("MS Matched Name (Debug)",                  "_debug_name"), # X-RAY COLUMN
 ]
 
 HEADERS = [h for h, _ in OUTPUT_COLUMNS]
@@ -104,18 +105,18 @@ def fetch_risk_measures(isin: str = None, mstar_id: str = None, timeout: int = 1
         return {"sharpe_3y": None, "stddev_3y": None}
 
 # ==========================================
-# UPGRADED MATCHING ENGINE
+# UPGRADED STRICT MATCHING ENGINE
 # ==========================================
 def match_fund(query_name: str, query_currency: str, universe: list) -> dict | None:
     q_name = query_name.lower().strip()
     q_curr = query_currency.upper().strip() if query_currency else ""
     if not q_name: return None
 
-    # Apply Alias if it exists
+    # Apply manual Alias if it exists
     if q_name in ALIAS_MAP:
         q_name = ALIAS_MAP[q_name]
 
-    # 1. Filter by Currency to prevent Share Class collisions
+    # Filter by Currency to prevent Share Class collisions
     search_pool = universe
     if q_curr:
         curr_pool = [f for f in universe if str(f.get("currency", "")).upper() == q_curr]
@@ -124,27 +125,28 @@ def match_fund(query_name: str, query_currency: str, universe: list) -> dict | N
 
     name_index = {str(f.get("name", "")).lower().strip(): f for f in search_pool if f.get("name")}
 
-    # 2. Exact Match
+    # 1. Exact Match
     if q_name in name_index:
         return name_index[q_name]
 
-    # 3. Simple Substring Match (e.g. "Fund A" is inside "Fund A MYR Class")
+    # 2. Simple Substring Match (e.g. "Fund A" is inside "Fund A MYR Class")
     for fname, fund in name_index.items():
         if q_name in fname or fname in q_name:
             return fund
 
-    # 4. Smart Fuzzy Match (75% similarity or higher using difflib)
-    closest = difflib.get_close_matches(q_name, name_index.keys(), n=1, cutoff=0.75)
+    # 3. Smart Fuzzy Match (Tightened to 85% to stop duplicates)
+    closest = difflib.get_close_matches(q_name, name_index.keys(), n=1, cutoff=0.85)
     if closest:
         return name_index[closest[0]]
 
-    # 5. Token Match Fallback (ignores word order)
+    # 4. Strict Token Match
     q_tokens = set(q_name.replace('-', ' ').split())
     best_fund, best_score = None, 0
     for fname, fund in name_index.items():
         f_tokens = set(fname.replace('-', ' ').split())
         score = len(q_tokens & f_tokens)
-        if score > best_score and score >= 4:
+        # Require 80% of the words to match to avoid merging different share classes
+        if score > best_score and score >= len(q_tokens) * 0.8:
             best_fund, best_score = fund, score
 
     return best_fund
@@ -156,7 +158,7 @@ def process_funds_csv(file_bytes: bytes, skip_risk: bool = False) -> bytes:
         except UnicodeDecodeError:
             return pd.read_csv(io.BytesIO(file_bytes), header=skip_rows, dtype=str, encoding='latin1')
 
-    # Handle the specific UWEALTH title row format
+    # Handle UWEALTH title row format
     df = safe_read_csv(0)
     cols = [str(c).strip() for c in df.columns]
     
@@ -178,13 +180,13 @@ def process_funds_csv(file_bytes: bytes, skip_risk: bool = False) -> bytes:
         fund_currency = str(row.get("Fund Currency", "") or "").strip()
         sales_charge = str(row.get("Fund Sales Charge (%)", "") or "").strip() or None
         
-        # Call the new Smart Matcher!
         fund = match_fund(fund_name, fund_currency, universe)
 
         if fund is None:
             row_out = {h: None for h in HEADERS}
             row_out["Fund Name"] = fund_name
             row_out["Fund Sales Charge (%)"] = sales_charge
+            row_out["MS Matched Name (Debug)"] = "NOT FOUND"
             results.append(row_out)
             continue
 
@@ -196,6 +198,7 @@ def process_funds_csv(file_bytes: bytes, skip_risk: bool = False) -> bytes:
         row_out = {}
         for header, key in OUTPUT_COLUMNS:
             if key == "_sales_charge": row_out[header] = sales_charge
+            elif key == "_debug_name": row_out[header] = fund.get("name")
             elif key in ("sharpe_3y", "stddev_3y"): row_out[header] = risk.get(key)
             else: row_out[header] = fund.get(key)
         results.append(row_out)
