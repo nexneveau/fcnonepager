@@ -4,6 +4,7 @@ import requests
 import xml.etree.ElementTree as ET
 import pandas as pd
 import io
+import difflib
 from datetime import date
 
 # Fetch Credentials securely from Render Environment
@@ -15,6 +16,15 @@ BASE_URL    = "https://api.morningstar.com/v2/service/mf"
 # In-Memory Cache to save Render resources
 _UNIVERSE_MEM_CACHE = None
 _UNIVERSE_CACHE_DATE = None
+
+# ==========================================
+# THE ALIAS MAP (FAILSAFE)
+# If Morningstar uses a completely different name than UWEALTH, map it here.
+# Format: "uwealth exact csv name in lowercase": "morningstar exact name in lowercase"
+# ==========================================
+ALIAS_MAP = {
+    # Example: "united-i global balanced fund myr class": "uob united-i global balanced myr",
+}
 
 OUTPUT_COLUMNS = [
     ("Fund Name",                                "name"),
@@ -52,12 +62,12 @@ def _parse_fund(el: ET.Element) -> dict:
     return {
         "id": el.get("_id"), "isin": g("DP-ISIN"), "name": g("DP-FundName"),
         "currency": g("DP-Currency"), "category": g("DP-CategoryName"),
-        "nav_date": g("DP-DayEndDate"), "return_ytd": g("TTR-ReturnYTD"),
-        "return_1w": g("DP-Return1Week"), "return_1m": g("TTR-Return1Mth"),
-        "return_3m": g("TTR-Return3Mth"), "return_6m": g("TTR-Return6Mth"),
-        "return_1y": g("TTR-Return1Yr"), "return_2y": g("TTR-Return2Yr"),
-        "return_3y": g("TTR-Return3Yr"), "return_5y": g("TTR-Return5Yr"),
-        "return_10y": g("TTR-Return10Yr"),
+        "nav_date": g("DP-DayEndDate"), "return_ytd": g("DP-ReturnYTD"),
+        "return_1w": g("DP-Return1Week"), "return_1m": g("DP-Return1Mth"),
+        "return_3m": g("DP-Return3Mth"), "return_6m": g("DP-Return6Mth"),
+        "return_1y": g("DP-Return1Yr"), "return_2y": g("DP-Return2Yr"),
+        "return_3y": g("DP-Return3Yr"), "return_5y": g("DP-Return5Yr"),
+        "return_10y": g("DP-Return10Yr"),
     }
 
 def load_universe() -> list[dict]:
@@ -93,24 +103,53 @@ def fetch_risk_measures(isin: str = None, mstar_id: str = None, timeout: int = 1
     except Exception:
         return {"sharpe_3y": None, "stddev_3y": None}
 
-def match_by_name(query: str, name_index: dict) -> dict | None:
-    q = query.lower().strip()
-    if not q: return None
-    if q in name_index: return name_index[q]
+# ==========================================
+# UPGRADED MATCHING ENGINE
+# ==========================================
+def match_fund(query_name: str, query_currency: str, universe: list) -> dict | None:
+    q_name = query_name.lower().strip()
+    q_curr = query_currency.upper().strip() if query_currency else ""
+    if not q_name: return None
+
+    # Apply Alias if it exists
+    if q_name in ALIAS_MAP:
+        q_name = ALIAS_MAP[q_name]
+
+    # 1. Filter by Currency to prevent Share Class collisions
+    search_pool = universe
+    if q_curr:
+        curr_pool = [f for f in universe if str(f.get("currency", "")).upper() == q_curr]
+        if curr_pool: 
+            search_pool = curr_pool
+
+    name_index = {str(f.get("name", "")).lower().strip(): f for f in search_pool if f.get("name")}
+
+    # 2. Exact Match
+    if q_name in name_index:
+        return name_index[q_name]
+
+    # 3. Simple Substring Match (e.g. "Fund A" is inside "Fund A MYR Class")
     for fname, fund in name_index.items():
-        if q in fname or fname in q: return fund
-    q_tokens = set(q.split())
+        if q_name in fname or fname in q_name:
+            return fund
+
+    # 4. Smart Fuzzy Match (75% similarity or higher using difflib)
+    closest = difflib.get_close_matches(q_name, name_index.keys(), n=1, cutoff=0.75)
+    if closest:
+        return name_index[closest[0]]
+
+    # 5. Token Match Fallback (ignores word order)
+    q_tokens = set(q_name.replace('-', ' ').split())
     best_fund, best_score = None, 0
     for fname, fund in name_index.items():
-        score = len(q_tokens & set(fname.split()))
-        if score > best_score and score >= 3:
+        f_tokens = set(fname.replace('-', ' ').split())
+        score = len(q_tokens & f_tokens)
+        if score > best_score and score >= 4:
             best_fund, best_score = fund, score
+
     return best_fund
 
 def process_funds_csv(file_bytes: bytes, skip_risk: bool = False) -> bytes:
-    # ---------------------------------------------------------
-    # ENCODING FIX: Try standard UTF-8, fallback to Excel Latin-1
-    # ---------------------------------------------------------
     def safe_read_csv(skip_rows):
         try:
             return pd.read_csv(io.BytesIO(file_bytes), header=skip_rows, dtype=str, encoding='utf-8')
@@ -132,13 +171,15 @@ def process_funds_csv(file_bytes: bytes, skip_risk: bool = False) -> bytes:
     df = df[df["Fund Name"].notna() & (df["Fund Name"] != "")].reset_index(drop=True)
 
     universe = load_universe()
-    name_index = {f["name"].lower().strip(): f for f in universe if f.get("name")}
-    
     results = []
+    
     for _, row in df.iterrows():
         fund_name = str(row.get("Fund Name", "") or "").strip()
+        fund_currency = str(row.get("Fund Currency", "") or "").strip()
         sales_charge = str(row.get("Fund Sales Charge (%)", "") or "").strip() or None
-        fund = match_by_name(fund_name, name_index)
+        
+        # Call the new Smart Matcher!
+        fund = match_fund(fund_name, fund_currency, universe)
 
         if fund is None:
             row_out = {h: None for h in HEADERS}
@@ -159,10 +200,8 @@ def process_funds_csv(file_bytes: bytes, skip_risk: bool = False) -> bytes:
             else: row_out[header] = fund.get(key)
         results.append(row_out)
 
-    # Convert back to a CSV byte stream
     out_df = pd.DataFrame(results, columns=HEADERS)
     output_stream = io.StringIO()
     out_df.to_csv(output_stream, index=False)
     
-    # 'utf-8-sig' adds a BOM, guaranteeing Excel opens the downloaded file flawlessly
     return output_stream.getvalue().encode('utf-8-sig')
